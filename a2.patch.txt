@@ -1,0 +1,694 @@
+https://powcoder.com
+代写代考加微信 powcoder
+Assignment Project Exam Help
+Add WeChat powcoder
+https://powcoder.com
+代写代考加微信 powcoder
+Assignment Project Exam Help
+Add WeChat powcoder
+Subject: [PATCH] base diff for copm3301 2022 assignment 2
+
+---
+ sys/dev/usb/ccidvar.h      |  49 ++++
+ sys/dev/usb/usb.h          |  26 ++
+ usr.sbin/ccidctl/Makefile  |   8 +
+ usr.sbin/ccidctl/ccidctl.c | 560 +++++++++++++++++++++++++++++++++++++
+ 4 files changed, 643 insertions(+)
+ create mode 100644 sys/dev/usb/ccidvar.h
+ create mode 100644 usr.sbin/ccidctl/Makefile
+ create mode 100644 usr.sbin/ccidctl/ccidctl.c
+
+diff --git a/sys/dev/usb/ccidvar.h b/sys/dev/usb/ccidvar.h
+new file mode 100644
+index 000000000..848799c45
+--- /dev/null
++++ b/sys/dev/usb/ccidvar.h
+@@ -0,0 +1,49 @@
++/* $OpenBSD$ */
++
++/*
++ * Copyright (c) 2022 The University of Queensland
++ *
++ * Permission to use, copy, modify, and distribute this software for any
++ * purpose with or without fee is hereby granted, provided that the above
++ * copyright notice and this permission notice appear in all copies.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
++ * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
++ * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
++ * ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
++ * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
++ * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
++ * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
++ */
++
++#ifndef _DEV_USB_CCID_H_
++#define _DEV_USB_CCID_H_
++
++struct ccid_driver_info {
++	char		ccid_device_name[16];
++	char		ccid_driver_name[16];
++	int		ccid_driver_unit;
++};
++
++#define CCID_ATR_MAXLEN		33
++
++struct ccid_atr {
++	size_t			len;
++	uint8_t			buf[CCID_ATR_MAXLEN];
++};
++
++#define CCID_ERR_MAXLEN		512
++
++struct ccid_err_info {
++	int			ccid_error;
++	char			ccid_errmsg[CCID_ERR_MAXLEN];
++};
++
++#define CCIDIOC_GET_DRIVER_INFO	_IOR('C', 0, struct ccid_driver_info)
++#define CCIDIOC_GET_DESCRIPTOR	_IOR('C', 1, struct usb_smartcard_descriptor)
++#define CCIDIOC_POWERON		_IO('C', 2)
++#define CCIDIOC_POWEROFF	_IO('C', 3)
++#define CCIDIOC_GET_ATR		_IOR('C', 4, struct ccid_atr)
++#define CCIDIOC_GET_LAST_ERR	_IOR('C', 5, struct ccid_err_info)
++
++#endif /* _DEV_USB_CCID_H_ */
+diff --git a/sys/dev/usb/usb.h b/sys/dev/usb/usb.h
+index 0b40302f8..fb317cb5e 100644
+--- a/sys/dev/usb/usb.h
++++ b/sys/dev/usb/usb.h
+@@ -569,6 +569,32 @@ typedef struct usb_port_status usb_port_status_t;
+ 
+ #define UICLASS_SMARTCARD	0x0b
+ 
++struct usb_smartcard_descriptor {
++	uByte		bLength;
++	uByte		bDescriptorType;
++	uWord		bcdCCID;
++	uByte		bMaxSlotIndex;
++	uByte		bVoltageSupport;
++	uDWord		dwProtocols;
++	uDWord		dwDefaultClock;
++	uDWord		dwMaximumClock;
++	uByte		bNumClockSupported;
++	uDWord		dwDataRate;
++	uDWord		dwMaxDataRate;
++	uByte		bNumDataRatesSupported;
++	uDWord		dwMaxIFSD;
++	uDWord		dwSynchProtocols;
++	uDWord		dwMechanical;
++	uDWord		dwFeatures;
++	uDWord		dwMaxCCIDMessageLength;
++	uByte		bClassGetResponse;
++	uByte		bClassEnvelope;
++	uWord		wLcdLayout;
++	uByte		bPINSupport;
++	uByte		bMaxCCIDBusySlots;
++} __packed;
++typedef struct usb_smartcard_descriptor usb_smartcard_descriptor_t;
++
+ /*#define UICLASS_FIRM_UPD	0x0c*/
+ 
+ #define UICLASS_SECURITY	0x0d
+diff --git a/usr.sbin/ccidctl/Makefile b/usr.sbin/ccidctl/Makefile
+new file mode 100644
+index 000000000..013df03ce
+--- /dev/null
++++ b/usr.sbin/ccidctl/Makefile
+@@ -0,0 +1,8 @@
++PROG=	ccidctl
++SRCS=	ccidctl.c
++MAN=	
++
++WARNINGS=Yes
++DEBUG=-g
++
++.include <bsd.prog.mk>
+diff --git a/usr.sbin/ccidctl/ccidctl.c b/usr.sbin/ccidctl/ccidctl.c
+new file mode 100644
+index 000000000..0320e11a5
+--- /dev/null
++++ b/usr.sbin/ccidctl/ccidctl.c
+@@ -0,0 +1,560 @@
++/*	$OpenBSD$ */
++
++/*
++ * Copyright (c) 2022 The University of Queensland
++ *
++ * Permission to use, copy, modify, and distribute this software for any
++ * purpose with or without fee is hereby granted, provided that the above
++ * copyright notice and this permission notice appear in all copies.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
++ * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
++ * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
++ * ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
++ * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
++ * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
++ * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
++ */
++
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <ctype.h>
++#include <fcntl.h>
++#include <unistd.h>
++#include <vis.h>
++#include <errno.h>
++#include <err.h>
++
++#include <dev/usb/usb.h>
++#include <dev/usb/ccidvar.h>
++
++#ifndef nitems
++#define nitems(_a) (sizeof((_a)) / sizeof((_a)[0]))
++#endif
++
++static void hexdump(const void *, size_t);
++
++#define DEVDIR "/dev"
++
++#define CCID_PREFIX "ccid"
++#define CCID_COUNT 4
++
++__dead static void
++usage(void)
++{
++	extern char *__progname;
++
++	fprintf(stderr, "usage:\t%s ls [-vv]\n", __progname);
++	fprintf(stderr, "\t%s info [-vv] device\n", __progname);
++	fprintf(stderr, "\t%s reset device\n", __progname);
++	fprintf(stderr, "\t%s ykselect device\n", __progname);
++
++	exit(1);
++}
++
++struct subcommand {
++	const char *cmd;
++	int (*handler)(int, char **);
++};
++
++static int		ccid_ls(int, char **);
++static int		ccid_show(int, char **);
++static int		ccid_restart(int, char **);
++static int		ccid_ykselect(int, char **);
++
++static const struct subcommand subcommands[] = {
++	{ "ls",		ccid_ls },
++	{ "show",	ccid_show },
++	{ "reset",	ccid_restart },
++	{ "ykselect",	ccid_ykselect },
++};
++
++static const struct subcommand *
++ccid_cmd(const char *name)
++{
++	size_t i;
++
++	for (i = 0; i < nitems(subcommands); i++) {
++		const struct subcommand *c = &subcommands[i];
++		if (strcmp(c->cmd, name) == 0)
++			return (c);
++	}
++
++	return (NULL);
++}
++
++int
++main(int argc, char *argv[])
++{
++	const struct subcommand *c;
++
++	argc--;
++	argv++;
++
++	if (argc == 0)
++		usage();
++
++	c = ccid_cmd(argv[0]);
++	if (c == NULL)
++		usage();
++
++	return ((*c->handler)(argc, argv));
++}
++
++static void
++ccid_show_usb(int fd, const char *name, int verbose)
++{
++	struct usb_device_info di;
++	char vv[sizeof(di.udi_vendor)*4];
++	char vp[sizeof(di.udi_product)*4];
++	char vr[sizeof(di.udi_release)*4];
++	char vs[sizeof(di.udi_serial)*4];
++
++	if (ioctl(fd, USB_DEVICEINFO, &di) == -1) {
++		warn("%s usb device info", name);
++		return;
++	}
++
++	printf("\tusb:\n");
++	if (verbose >= 4)
++		hexdump(&di, sizeof(di));
++
++	printf("\t\tid: %04x:%04x\n",
++	    di.udi_vendorNo, di.udi_productNo);
++
++	strvis(vv, di.udi_vendor, VIS_CSTYLE);
++	strvis(vp, di.udi_product, VIS_CSTYLE);
++	strvis(vr, di.udi_release, VIS_CSTYLE);
++	strvis(vs, di.udi_serial, VIS_CSTYLE);
++
++	if (vv[0] != '\0')
++		printf("\t\tvendor: \"%s\"\n", vv);
++	if (vp[0] != '\0')
++		printf("\t\tproduct: \"%s\"\n", vp);
++	if (vr[0] != '\0')
++		printf("\t\trelease: \"%s\"\n", vr);
++	if (vs[0] != '\0')
++		printf("\t\tserial: \"%s\"\n", vs);
++}
++
++static void
++ccid_show_smartcard(int fd, const char *name, int verbose)
++{
++	struct usb_smartcard_descriptor scdesc;
++	uint16_t word;
++	uint32_t dword;
++	int t1 = 0;
++
++	if (ioctl(fd, CCIDIOC_GET_DESCRIPTOR, &scdesc) == -1) {
++		warn("%s smartcard descriptor", name);
++		return;
++	}
++
++	printf("\tsmartcard:\n");
++	if (verbose >= 4)
++		hexdump(&scdesc, sizeof(scdesc));
++
++	word = UGETW(scdesc.bcdCCID);
++	printf("\t\tCCID rev: %x.%02x\n", word >> 8, word & 0xff);
++	printf("\t\tmax slot index: %u\n", scdesc.bMaxSlotIndex);
++	if (scdesc.bVoltageSupport & 0x7) {
++		printf("\t\tsupported voltages:");
++		if (scdesc.bVoltageSupport & 0x4)
++			printf(" 1.8V");
++		if (scdesc.bVoltageSupport & 0x2)
++			printf(" 3.0V");
++		if (scdesc.bVoltageSupport & 0x1)
++			printf(" 5.0V");
++		printf("\n");
++	}
++
++	dword = UGETDW(scdesc.dwProtocols);
++	printf("\t\tprotocols:");
++	if (dword & 0x3) {
++		if (dword & 0x1)
++			printf(" T=0");
++		if (dword & 0x2) {
++			printf(" T=1");
++			t1 = 1;
++		}
++	} else
++		printf(" none");
++	printf("\n");
++
++	dword = UGETDW(scdesc.dwDefaultClock);
++	printf("\t\tdefault clock: %uKHz (%u.%uMHz)\n", dword,
++	    dword / 1000, dword % 1000);
++	dword = UGETDW(scdesc.dwMaximumClock);
++	printf("\t\tmaximum clock: %uKHz (%u.%uMHz)\n", dword,
++	    dword / 1000, dword % 1000);
++
++	printf("\t\tnum clock supported: ");
++	if (scdesc.bNumClockSupported)
++		printf("%u", scdesc.bNumClockSupported);
++	else
++		printf("default");
++	printf("\n");
++
++	printf("\t\tdata rate: %u bps\n",
++	    UGETDW(scdesc.dwDataRate));
++	printf("\t\tmax data rate: %u bps\n",
++	    UGETDW(scdesc.dwMaxDataRate));
++
++	printf("\t\tnum data rates supported: ");
++	if (scdesc.bNumDataRatesSupported)
++		printf("%u", scdesc.bNumDataRatesSupported);
++	else
++		printf("default");
++	printf("\n");
++
++	if (t1)
++		printf("\t\tmax IFSD: %u\n", UGETDW(scdesc.dwMaxIFSD));
++
++	dword = UGETDW(scdesc.dwSynchProtocols);
++	if (dword & 0x7) {
++		printf("\t\tsynch protocols:");
++		if (dword & 0x1)
++			printf(" 2-wire");
++		if (dword & 0x2)
++			printf(" 3-wire");
++		if (dword & 0x4)
++			printf(" I2C");
++		printf("\n");
++	}
++
++	dword = UGETDW(scdesc.dwMechanical);
++	printf("\t\tmechanical:");
++	if (dword == 0)
++		printf(" none");
++	else {
++		if (dword & 0x1)
++			printf(" accept");
++		if (dword & 0x2)
++			printf(" eject");
++		if (dword & 0x4)
++			printf(" capture");
++		if (dword & 0x8)
++			printf(" lock/unlock");
++	}
++	printf("\n");
++
++	dword = UGETDW(scdesc.dwFeatures);
++	printf("\t\tfeatures:");
++	if (dword == 0)
++		printf(" none");
++	else {
++		if (dword & 0x2)
++			printf(" auto-atr");
++		if (dword & 0x4)
++			printf(" auto-icc-insertion");
++		if (dword & 0x8)
++			printf(" auto-icc-voltage");
++		if (dword & 0x10)
++			printf(" auto-icc-clock");
++		if (dword & 0x20)
++			printf(" auto-baud");
++		if (dword & 0x40)
++			printf(" auto-params");
++		if (dword & 0x80)
++			printf(" auto-pps");
++		if (dword & 0x100)
++			printf(" icc-can-stop");
++		if (dword & 0x200)
++			printf(" nad-thing");
++		if (dword & 0x400)
++			printf(" auto-ifsd");
++
++		if (dword & 0x10000)
++			printf(" tpdu-exch");
++		if (dword & 0x20000)
++			printf(" short-apdu-exch");
++		if (dword & 0x40000)
++			printf(" extended-apdu-exch");
++
++		if (dword & 0x100000)
++			printf(" usb-wakeup");
++	}
++	printf("\n");
++
++	printf("\t\tmax message length: %u\n",
++	    UGETDW(scdesc.dwMaxCCIDMessageLength));
++
++	word = UGETW(scdesc.wLcdLayout);
++	printf("\t\tlcd: ");
++	if (word == 0)
++		printf("none");
++	else
++		printf("%ux%u", word >> 8, word & 0xff);
++	printf("\n");
++
++	if (scdesc.bPINSupport & 0x3) {
++		printf("\t\tpin support:");
++		if (scdesc.bPINSupport & 0x1)
++			printf(" verification");
++		if (scdesc.bPINSupport & 0x2)
++			printf(" modification");
++		printf("\n");
++	}
++
++	printf("\t\tmax ccid busy slots: %u\n",
++	    scdesc.bMaxCCIDBusySlots);
++}
++
++static void
++ccid_show_one(int fd, const char *name, int verbose)
++{
++	struct ccid_driver_info info;
++
++	if (ioctl(fd, CCIDIOC_GET_DRIVER_INFO, &info) == -1)
++		err(1, "%s driver info", name);
++
++	printf("%s: device: \"%s\" driver: \"%s\" unit: %d\n", name,
++	    info.ccid_device_name,
++	    info.ccid_driver_name, info.ccid_driver_unit);
++
++	if (verbose >= 2)
++		ccid_show_usb(fd, name, verbose);
++
++	if (verbose >= 1)
++		ccid_show_smartcard(fd, name, verbose);
++}
++
++static int
++ccid_ls(int argc, char *argv[])
++{
++	char ccidname[FILENAME_MAX];
++	int dirfd;
++	int fd;
++	int rv;
++	int i;
++	int ch;
++	int verbose = 0;
++
++	while ((ch = getopt(argc, argv, "v")) != -1) {
++		switch (ch) {
++		case 'v':
++			verbose++;
++			break;
++		default:
++			usage();
++			/* NOTREACHED */
++		}
++	}
++
++	argc -= optind;
++	argv += optind;
++
++	if (argc != 0)
++		usage();
++
++	dirfd = open(DEVDIR, O_RDONLY|O_DIRECTORY);
++	if (dirfd == -1)
++		err(1, "%s", DEVDIR);
++
++	for (i = 0; i < CCID_COUNT; i++) {
++		rv = snprintf(ccidname, sizeof(ccidname), "%s%d",
++		    CCID_PREFIX, i);
++		if (rv == -1 || rv >= (int)sizeof(ccidname))
++			errx(1, "ccid name is weird");
++
++		fd = openat(dirfd, ccidname, O_RDONLY);
++		if (fd == -1)
++			warn("%s", ccidname);
++		else
++			ccid_show_one(fd, ccidname, verbose);
++
++		close(fd);
++	}
++
++	return (0);
++}
++
++static int
++ccid_opendev(const char *name, int flags)
++{
++	int dirfd;
++	int fd;
++
++	dirfd = open(DEVDIR, O_RDONLY|O_DIRECTORY);
++	if (dirfd == -1)
++		err(1, "%s", DEVDIR);
++
++	fd = openat(dirfd, name, flags);
++	close(dirfd);
++
++	return (fd);
++}
++
++static int
++ccid_show(int argc, char *argv[])
++{
++	const char *ccidname;
++	int fd;
++	int ch;
++	int verbose = 1;
++
++	while ((ch = getopt(argc, argv, "v")) != -1) {
++		switch (ch) {
++		case 'v':
++			verbose++;
++			break;
++		default:
++			usage();
++			/* NOTREACHED */
++		}
++	}
++
++	argc -= optind;
++	argv += optind;
++
++	if (argc != 1)
++		usage();
++
++	ccidname = argv[0];
++
++	fd = ccid_opendev(ccidname, O_RDONLY);
++	if (fd == -1)
++		err(1, "%s", ccidname);
++
++	ccid_show_one(fd, ccidname, verbose);
++
++	return (0);
++}
++
++static int
++ccid_restart(int argc, char *argv[])
++{
++	const char *ccidname;
++	int fd;
++
++	if (argc != 2)
++		usage();
++
++	ccidname = argv[1];
++
++	fd = ccid_opendev(ccidname, O_RDWR);
++	if (fd == -1)
++		err(1, "%s", ccidname);
++
++	if (ioctl(fd, CCIDIOC_POWERON) == -1)
++		err(1, "%s power on", ccidname);
++
++	return (0);
++}
++
++static int
++ccid_ykselect(int argc, char *argv[])
++{
++	static const uint8_t select_piv[] = {
++	    0x00, 0xA4, 0x04, 0x00, 0x0B, 0xA0, 0x00, 0x00,
++	    0x03, 0x08, 0x00, 0x00, 0x10, 0x00, 0x01, 0x00,
++	    0x00
++	};
++	static const uint8_t ykfw[] = {
++	    0x00, 0xFD, 0x00, 0x00, 0x00
++	};
++	uint8_t res[512];
++	uint16_t status;
++	ssize_t rv;
++	size_t len;
++	const char *ccidname;
++	int fd;
++
++	if (argc != 2)
++		usage();
++
++	ccidname = argv[1];
++
++	fd = ccid_opendev(ccidname, O_RDWR);
++	if (fd == -1)
++		err(1, "%s", ccidname);
++
++	rv = write(fd, select_piv, sizeof(select_piv));
++	if (rv == -1)
++		err(1, "%s write ykselect select piv", ccidname);
++	if (rv != sizeof(select_piv)) {
++		errx(1, "%s write ykselect select piv: wrote %zd/%zu bytes",
++		    ccidname, rv, sizeof(select_piv));
++	}
++
++	rv = read(fd, &res, sizeof(res));
++	if (rv == -1)
++		err(1, "%s read ykselect select piv response", ccidname);
++	len = (size_t)rv;
++	if (len < sizeof(status)) {
++		errx(1, "%s read ykselect select piv response: "
++		    "read %zu/%zu bytes", ccidname, len, sizeof(status));
++	}
++
++	status = (res[len - 2] << 8) | (res[len - 1]);
++	if (status != 0x9000) {
++		errx(1, "%s read ykselect select piv: "
++		    "unexpected status 0x%04x", ccidname, status);
++	}
++
++	rv = write(fd, ykfw, sizeof(ykfw));
++	if (rv == -1)
++		err(1, "%s write ykselect yk fw ver", ccidname);
++	len = (size_t)rv;
++	if (len != sizeof(ykfw)) {
++		errx(1, "%s write ykselect yk fw ver: wrote %zu/%zu bytes",
++		    ccidname, len, sizeof(ykfw));
++	}
++
++	rv = read(fd, &res, sizeof(res));
++	if (rv == -1)
++		err(1, "%s read ykselect yk fw ver", ccidname);
++	len = (size_t)rv;
++	if (len < sizeof(status)) {
++		errx(1, "%s read ykselect yk fw ver: "
++		    "read %zu/%zu bytes", ccidname, len, sizeof(status));
++	}
++
++	status = (res[len - 2] << 8) | (res[len - 1]);
++	if (status != 0x9000) {
++		errx(1, "%s read ykselect yk fw ver: "
++		    "unexpected status 0x%04x", ccidname, status);
++	}
++	len -= sizeof(status);
++	if (len != 3) {
++		errx(1, "%s read ykselect yk fw ver: "
++		    "read %zu/%u bytes", ccidname, len, 3);
++	}
++
++	printf("%s: Yubikey firmware v%u.%u.%u\n", ccidname,
++	    res[0], res[1], res[2]);
++
++	return (0);
++
++}
++
++static int
++printable(int ch)
++{
++	if (ch == '\0')
++		return ('_');
++	if (!isprint(ch))
++		return ('~');
++
++	return (ch);
++}
++
++static void
++hexdump(const void *d, size_t datalen)
++{
++	const uint8_t *data = d;
++	size_t i, j = 0;
++
++	for (i = 0; i < datalen; i += j) {
++		printf("%4zu: ", i);
++		for (j = 0; j < 16 && i+j < datalen; j++)
++			printf("%02x ", data[i + j]);
++		while (j++ < 16)
++			printf("   ");
++		printf("|");
++		for (j = 0; j < 16 && i+j < datalen; j++)
++			putchar(printable(data[i + j]));
++		printf("|\n");
++	}
++}
+-- 
+2.35.1
